@@ -3,8 +3,6 @@ import time
 import random
 import sys
 import requests
-import smtplib
-from email.mime.text import MIMEText
 from concurrent.futures import ThreadPoolExecutor
 
 from selenium import webdriver
@@ -15,19 +13,10 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 
 # =========================
-# 🔐 VARIABLES DE ENTORNO
+# 🔐 ENV
 # =========================
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-
-EMAIL = os.getenv("EMAIL")
-EMAIL_PASS = os.getenv("EMAIL_PASS")
-EMAIL_TO = os.getenv("EMAIL_TO")
-
-TWILIO_SID = os.getenv("TWILIO_SID")
-TWILIO_AUTH = os.getenv("TWILIO_AUTH")
-TWILIO_FROM = os.getenv("TWILIO_FROM")  # "whatsapp:+14155238886"
-TWILIO_TO = os.getenv("TWILIO_TO")      # "whatsapp:+57XXXXXXXXXX"
 
 URLS = [
     "https://www.ticketmaster.co/event/bts-world-tour-venta-general-sabado-3-octubre",
@@ -35,7 +24,7 @@ URLS = [
 ]
 
 # =========================
-# 🧠 LOG (Railway)
+# 🧠 LOG
 # =========================
 def log(msg):
     print(msg)
@@ -51,59 +40,14 @@ def send_telegram(msg):
     except Exception as e:
         log(f"Error Telegram: {e}")
 
-# =========================
-# 📧 EMAIL (GMAIL)
-# =========================
-def send_email(msg):
-    if not (EMAIL and EMAIL_PASS and EMAIL_TO):
-        return
-    try:
-        mensaje = MIMEText(msg)
-        mensaje["Subject"] = "Alerta Boletas"
-        mensaje["From"] = EMAIL
-        mensaje["To"] = EMAIL_TO
-
-        server = smtplib.SMTP("smtp.gmail.com", 587)
-        server.starttls()
-        server.login(EMAIL, EMAIL_PASS)
-        server.send_message(mensaje)
-        server.quit()
-    except Exception as e:
-        log(f"Error Email: {e}")
-
-# =========================
-# 💬 WHATSAPP (TWILIO)
-# =========================
-def send_whatsapp(msg):
-    if not (TWILIO_SID and TWILIO_AUTH and TWILIO_FROM and TWILIO_TO):
-        return
-    try:
-        from requests.auth import HTTPBasicAuth
-        requests.post(
-            f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_SID}/Messages.json",
-            data={"From": TWILIO_FROM, "To": TWILIO_TO, "Body": msg},
-            auth=HTTPBasicAuth(TWILIO_SID, TWILIO_AUTH)
-        )
-    except Exception as e:
-        log(f"Error WhatsApp: {e}")
-
-# =========================
-# 🚨 ALERTA EXTREMA
-# =========================
 def alerta_extrema(msg):
-    # Telegram en ráfaga
+    # ráfaga para no perderla
     for _ in range(5):
         send_telegram(f"🚨 ALERTA 🚨\n{msg}")
-        time.sleep(1.2)
-
-    # Email (1 envío)
-    send_email(f"🚨 ALERTA BOLETAS 🚨\n{msg}")
-
-    # WhatsApp (1 envío)
-    send_whatsapp(f"🚨 DISPONIBLE 🚨\n{msg}")
+        time.sleep(1.1)
 
 # =========================
-# ⚙️ SELENIUM (2 drivers)
+# ⚙️ SELENIUM
 # =========================
 def crear_driver():
     options = Options()
@@ -117,7 +61,7 @@ def crear_driver():
     service = Service("/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=options)
 
-def wait_dom(driver, timeout=8):
+def wait_dom(driver, timeout=6):
     try:
         WebDriverWait(driver, timeout).until(
             EC.presence_of_element_located(("css selector", "body"))
@@ -125,12 +69,24 @@ def wait_dom(driver, timeout=8):
     except:
         pass
 
-log("🚀 Iniciando BOT ULTRA PRO...")
+log("🚀 Iniciando BOT (refresh inteligente + prioridad)...")
 
 try:
     driver1 = crear_driver()
     driver2 = crear_driver()
-    send_telegram("🚀 Bot ULTRA PRO activo")
+
+    # 🔥 “calentar” sesión/cookies (reduce latencia posterior)
+    driver1.get("https://www.ticketmaster.co")
+    driver2.get("https://www.ticketmaster.co")
+    time.sleep(4)
+
+    # 🔥 primera carga de eventos
+    for d in (driver1, driver2):
+        for url in URLS:
+            d.get(url)
+            wait_dom(d, 6)
+
+    send_telegram("🚀 Bot activo y monitoreando")
 except Exception as e:
     log(f"❌ Error iniciando Chrome: {e}")
     exit()
@@ -139,24 +95,33 @@ except Exception as e:
 # 🧠 ESTADO
 # =========================
 estado_anterior = {url: None for url in URLS}
+primera_vez = {url: True for url in URLS}
 
 # =========================
-# 🔍 DETECCIÓN
+# 🔍 DETECCIÓN (prioritaria)
 # =========================
 def detectar(driver, url):
     try:
-        driver.get(url)
-        wait_dom(driver, 8)
-        time.sleep(random.uniform(1.5, 3.0))
+        # ⚡ refresh inteligente
+        if primera_vez[url]:
+            driver.get(url)
+            primera_vez[url] = False
+        else:
+            driver.refresh()
 
-        # 1) Botón real
-        botones = driver.find_elements(By.CSS_SELECTOR, "button")
-        for b in botones:
-            txt = b.text.lower()
+        wait_dom(driver, 6)
+        time.sleep(random.uniform(0.8, 1.6))  # micro-pausa humana
+
+        # ⚡ selector directo (más rápido)
+        elementos = driver.find_elements(By.CSS_SELECTOR, "[data-testid*='purchase'], button")
+
+        # 🧠 PRIORIDAD: si vemos botón de compra, salimos YA
+        for el in elementos:
+            txt = el.text.lower()
             if any(x in txt for x in ["comprar", "buy", "tickets", "entradas"]):
                 return "disponible"
 
-        # 2) Fallback texto
+        # fallback texto
         body = driver.page_source.lower()
         if any(x in body for x in ["agotado", "sold out", "no hay entradas"]):
             return "agotado"
@@ -174,12 +139,15 @@ def verificar(url):
     with ThreadPoolExecutor(max_workers=2) as executor:
         resultados = list(executor.map(lambda d: detectar(d, url), [driver1, driver2]))
 
-    if resultados.count("disponible") >= 2:
+    # ⚡ PRIORIDAD: si uno ve disponible → avisar de una
+    if "disponible" in resultados:
         return "disponible"
-    elif resultados.count("agotado") >= 2:
+
+    # consenso para agotado
+    if resultados.count("agotado") >= 2:
         return "agotado"
-    else:
-        return "inestable"
+
+    return "inestable"
 
 # =========================
 # 🔁 CICLO
@@ -189,24 +157,25 @@ def ciclo():
         estado = verificar(url)
         log(f"📊 {url} → {estado}")
 
+        # 🔔 aviso solo si cambia (menos spam)
         if estado != estado_anterior[url]:
             if estado == "disponible":
-                alerta_extrema(url)  # 🔥 ALERTA MÁXIMA
+                alerta_extrema(f"🔥 DISPONIBLE 🔥\n{url}")
             elif estado == "agotado":
                 send_telegram(f"❌ AGOTADO\n{url}")
-                send_email(f"❌ AGOTADO\n{url}")
             else:
                 send_telegram(f"⚠️ Estado: {estado}\n{url}")
 
             estado_anterior[url] = estado
 
 # =========================
-# 🔁 LOOP PRINCIPAL
+# 🔁 LOOP
 # =========================
 while True:
-    log("🔁 Ciclo ULTRA PRO...")
+    log("🔁 Ciclo activo...")
     ciclo()
 
-    espera = random.randint(25, 45)
+    # ⚡ más rápido pero con variación humana
+    espera = random.randint(20, 35)
     log(f"⏳ Esperando {espera}s\n")
     time.sleep(espera)
