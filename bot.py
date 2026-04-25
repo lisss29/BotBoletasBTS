@@ -85,7 +85,7 @@ def iniciar_driver():
     time.sleep(2)
 
     log("✅ Driver listo")
-    send_telegram("🚀 Bot ÉLITE activo")
+    send_telegram("🚀 Bot activo")
 
 # =========================
 # 🧠 ESTADO
