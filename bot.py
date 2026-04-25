@@ -3,8 +3,8 @@ import time
 import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 
-# 🔐 Variables de entorno (NO pongas tokens en el código)
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 
@@ -18,19 +18,27 @@ def send_telegram(msg):
         url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
         requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
     except Exception as e:
-        print("Error enviando mensaje:", e)
+        print("Error Telegram:", e)
 
-# ⚙️ Configuración de Chrome para Railway
+print("🚀 Iniciando bot...")
+
+# ⚙️ CONFIGURACIÓN CORRECTA PARA RAILWAY
 options = Options()
+options.binary_location = "/usr/bin/chromium"
 options.add_argument("--headless=new")
 options.add_argument("--no-sandbox")
 options.add_argument("--disable-dev-shm-usage")
 
-driver = webdriver.Chrome(options=options)
+service = Service("/usr/bin/chromedriver")
 
-print("🚀 Bot iniciado en Railway")
+try:
+    driver = webdriver.Chrome(service=service, options=options)
+    print("✅ Chrome iniciado correctamente")
+    send_telegram("🚀 Bot iniciado correctamente en Railway")
+except Exception as e:
+    print("❌ Error iniciando Chrome:", e)
+    exit()
 
-# 🔁 Control para no enviar spam
 avisado = {url: False for url in URLS}
 
 def check():
@@ -42,9 +50,7 @@ def check():
             body = driver.page_source.lower()
 
             disponible = not any(x in body for x in [
-                "agotado",
-                "sold out",
-                "no hay entradas"
+                "agotado", "sold out", "no hay entradas"
             ])
 
             if disponible:
@@ -57,10 +63,8 @@ def check():
                 avisado[url] = False
 
         except Exception as e:
-            print("⚠️ Error revisando:", url)
-            print(e)
+            print("⚠️ Error revisando:", url, e)
 
-# 🔁 Loop infinito
 while True:
     check()
     print("⏳ Esperando 90 segundos...\n")
