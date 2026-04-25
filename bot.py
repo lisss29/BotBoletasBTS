@@ -3,14 +3,11 @@ import time
 import random
 import sys
 import requests
-from concurrent.futures import ThreadPoolExecutor
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 
 # =========================
 # 🔐 ENV
@@ -35,147 +32,160 @@ def log(msg):
 # =========================
 def send_telegram(msg):
     try:
-        url = f"https://api.telegram.org/bot{TOKEN}/sendMessage"
-        requests.post(url, data={"chat_id": CHAT_ID, "text": msg})
+        requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={"chat_id": CHAT_ID, "text": msg},
+            timeout=10
+        )
     except Exception as e:
         log(f"Error Telegram: {e}")
 
 def alerta_extrema(msg):
-    # ráfaga para no perderla
-    for _ in range(5):
+    # ráfaga corta y directa
+    for _ in range(4):
         send_telegram(f"🚨 ALERTA 🚨\n{msg}")
-        time.sleep(1.1)
+        time.sleep(0.9)
 
 # =========================
-# ⚙️ SELENIUM
+# ⚙️ DRIVER ULTRA LIGERO
 # =========================
 def crear_driver():
     options = Options()
     options.binary_location = "/usr/bin/chromium"
+
     options.add_argument("--headless=new")
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-blink-features=AutomationControlled")
+
+    # 🔥 reducir consumo
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-extensions")
+    options.add_argument("--disable-background-networking")
+    options.add_argument("--disable-sync")
+    options.add_argument("--metrics-recording-only")
+    options.add_argument("--mute-audio")
+
     options.add_argument("user-agent=Mozilla/5.0")
 
     service = Service("/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=options)
 
-def wait_dom(driver, timeout=6):
+driver = None
+
+def iniciar_driver():
+    global driver
     try:
-        WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located(("css selector", "body"))
-        )
+        if driver:
+            driver.quit()
     except:
         pass
 
-log("🚀 Iniciando BOT (refresh inteligente + prioridad)...")
+    driver = crear_driver()
+    driver.get("https://www.ticketmaster.co")
+    time.sleep(2)
 
-try:
-    driver1 = crear_driver()
-    driver2 = crear_driver()
-
-    # 🔥 “calentar” sesión/cookies (reduce latencia posterior)
-    driver1.get("https://www.ticketmaster.co")
-    driver2.get("https://www.ticketmaster.co")
-    time.sleep(4)
-
-    # 🔥 primera carga de eventos
-    for d in (driver1, driver2):
-        for url in URLS:
-            d.get(url)
-            wait_dom(d, 6)
-
-    send_telegram("🚀 Bot activo y monitoreando")
-except Exception as e:
-    log(f"❌ Error iniciando Chrome: {e}")
-    exit()
+    log("✅ Driver listo")
+    send_telegram("🚀 Bot ÉLITE activo")
 
 # =========================
 # 🧠 ESTADO
 # =========================
 estado_anterior = {url: None for url in URLS}
-primera_vez = {url: True for url in URLS}
+cooldown_alerta = {url: 0 for url in URLS}
 
 # =========================
-# 🔍 DETECCIÓN (prioritaria)
+# 🔍 DETECCIÓN RÁPIDA
 # =========================
-def detectar(driver, url):
+def detectar_rapido(url):
     try:
-        # ⚡ refresh inteligente
-        if primera_vez[url]:
-            driver.get(url)
-            primera_vez[url] = False
-        else:
-            driver.refresh()
+        driver.get(url)
+        time.sleep(random.uniform(1.2, 2.2))
 
-        wait_dom(driver, 6)
-        time.sleep(random.uniform(0.8, 1.6))  # micro-pausa humana
+        # selector directo
+        elementos = driver.find_elements(By.CSS_SELECTOR, "button")
 
-        # ⚡ selector directo (más rápido)
-        elementos = driver.find_elements(By.CSS_SELECTOR, "[data-testid*='purchase'], button")
-
-        # 🧠 PRIORIDAD: si vemos botón de compra, salimos YA
         for el in elementos:
             txt = el.text.lower()
             if any(x in txt for x in ["comprar", "buy", "tickets", "entradas"]):
-                return "disponible"
+                return True
 
-        # fallback texto
-        body = driver.page_source.lower()
-        if any(x in body for x in ["agotado", "sold out", "no hay entradas"]):
-            return "agotado"
-
-        return "desconocido"
+        return False
 
     except Exception as e:
-        log(f"⚠️ Error detectar: {e}")
-        return "error"
+        log(f"⚠️ detectar_rapido error: {e}")
+        if "tab crashed" in str(e).lower():
+            iniciar_driver()
+        return False
 
 # =========================
-# 🔁 VERIFICACIÓN PARALELA
+# 🔁 CONFIRMACIÓN RÁPIDA
 # =========================
-def verificar(url):
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        resultados = list(executor.map(lambda d: detectar(d, url), [driver1, driver2]))
+def confirmar(url):
+    try:
+        time.sleep(random.uniform(0.6, 1.2))
+        driver.refresh()
+        time.sleep(random.uniform(1.0, 1.8))
 
-    # ⚡ PRIORIDAD: si uno ve disponible → avisar de una
-    if "disponible" in resultados:
-        return "disponible"
+        body = driver.page_source.lower()
 
-    # consenso para agotado
-    if resultados.count("agotado") >= 2:
-        return "agotado"
+        if any(x in body for x in ["agotado", "sold out", "no hay entradas"]):
+            return False
 
-    return "inestable"
+        return True
+
+    except Exception as e:
+        log(f"⚠️ confirmar error: {e}")
+        return True  # mejor alertar que perder oportunidad
 
 # =========================
-# 🔁 CICLO
+# 🔁 CICLO ÉLITE
 # =========================
 def ciclo():
     for url in URLS:
-        estado = verificar(url)
+        disponible = detectar_rapido(url)
+
+        if disponible:
+            # ⏱️ evitar spam de alertas
+            ahora = time.time()
+            if ahora - cooldown_alerta[url] > 20:
+
+                # 🔥 confirmación rápida (no bloquea demasiado)
+                if confirmar(url):
+                    log(f"🔥 DISPONIBLE {url}")
+                    alerta_extrema(url)
+                    cooldown_alerta[url] = ahora
+                    estado_anterior[url] = "disponible"
+                    continue
+
+        # fallback estado
+        try:
+            body = driver.page_source.lower()
+            if any(x in body for x in ["agotado", "sold out"]):
+                estado = "agotado"
+            else:
+                estado = "desconocido"
+        except:
+            estado = "error"
+
         log(f"📊 {url} → {estado}")
 
-        # 🔔 aviso solo si cambia (menos spam)
         if estado != estado_anterior[url]:
-            if estado == "disponible":
-                alerta_extrema(f"🔥 DISPONIBLE 🔥\n{url}")
-            elif estado == "agotado":
-                send_telegram(f"❌ AGOTADO\n{url}")
-            else:
-                send_telegram(f"⚠️ Estado: {estado}\n{url}")
-
+            send_telegram(f"{estado.upper()}\n{url}")
             estado_anterior[url] = estado
+
+# =========================
+# 🚀 START
+# =========================
+log("🚀 MODO ÉLITE ACTIVADO")
+iniciar_driver()
 
 # =========================
 # 🔁 LOOP
 # =========================
 while True:
-    log("🔁 Ciclo activo...")
     ciclo()
 
-    # ⚡ más rápido pero con variación humana
-    espera = random.randint(20, 35)
+    # ⚡ ciclo agresivo pero humano
+    espera = random.randint(15, 28)
     log(f"⏳ Esperando {espera}s\n")
     time.sleep(espera)
